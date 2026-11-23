@@ -50,3 +50,4 @@ databases:
   # Managed PostgreSQL
   - name: reachinbox-db
     plan: free
+

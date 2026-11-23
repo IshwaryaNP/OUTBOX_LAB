@@ -126,3 +126,4 @@ export const EmailTable: React.FC<EmailTableProps> = ({ emails, type, loading, o
     </div>
   );
 };
+
