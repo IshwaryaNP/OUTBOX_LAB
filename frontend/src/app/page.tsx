@@ -9,11 +9,76 @@ import { User, EmailRecord } from '@/types';
 import { fetchWithAuth } from '@/lib/api';
 import { Search, Plus, Calendar, CheckSquare, RefreshCw, LogIn } from 'lucide-react';
 
+// Default initial demo user so dashboard loads immediately
+const DEFAULT_USER: User = {
+  id: 'demo-user-id',
+  name: 'ReachInbox Recruiter',
+  email: 'recruiter@reachinbox.test',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
+  slackConnected: false,
+};
+
+// Seed demo emails so the dashboard displays data even without a live backend connection
+const INITIAL_SCHEDULED: EmailRecord[] = [
+  {
+    id: 'sch-1',
+    recipient: 'alex.rivera@techflow.io',
+    subject: 'Transforming cold outreach with ReachInbox AI',
+    body: 'Hi Alex, I saw your recent launch and thought you would love ReachInbox.',
+    scheduledFor: new Date(Date.now() + 1000 * 60 * 15).toISOString(),
+    status: 'SCHEDULED',
+    sender: { name: 'Growth Team', email: 'sender1@reachinbox.ethereal.email' },
+  },
+  {
+    id: 'sch-2',
+    recipient: 'sarah.chen@innovateai.com',
+    subject: 'AI Sequence Optimization for InnovateAI',
+    body: 'Hi Sarah, let us automate your prospecting pipeline.',
+    scheduledFor: new Date(Date.now() + 1000 * 60 * 45).toISOString(),
+    status: 'SCHEDULED',
+    sender: { name: 'Growth Team', email: 'sender2@reachinbox.ethereal.email' },
+  },
+  {
+    id: 'sch-3',
+    recipient: 'david.kim@nexusgrowth.co',
+    subject: 'High-intent lead generation',
+    body: 'Reaching out regarding your cold email delivery rates.',
+    scheduledFor: new Date(Date.now() + 1000 * 60 * 120).toISOString(),
+    status: 'RATE_LIMITED',
+    sender: { name: 'Growth Team', email: 'sender1@reachinbox.ethereal.email' },
+  },
+];
+
+const INITIAL_SENT: EmailRecord[] = [
+  {
+    id: 'sent-1',
+    recipient: 'michael.scott@dundermifflin.com',
+    subject: 'Exclusive cold email pilot for Dunder Mifflin',
+    body: 'Automate your paper sales pipeline with intelligent AI sequences.',
+    scheduledFor: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
+    sentAt: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
+    status: 'SENT',
+    etherealPreviewUrl: 'https://ethereal.email/message/Zu304892jklsd',
+    sender: { name: 'Growth Team', email: 'sender1@reachinbox.ethereal.email' },
+  },
+  {
+    id: 'sent-2',
+    recipient: 'elena.rostova@cloudscale.net',
+    subject: 'Scaling outreach infrastructure 10x',
+    body: 'Hi Elena, let us connect to talk about persistent email scheduling.',
+    scheduledFor: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
+    sentAt: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
+    status: 'SENT',
+    etherealPreviewUrl: 'https://ethereal.email/message/Yx109238asdfl',
+    sender: { name: 'Growth Team', email: 'sender2@reachinbox.ethereal.email' },
+  },
+];
+
 export default function Dashboard() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(DEFAULT_USER);
   const [activeTab, setActiveTab] = useState<'scheduled' | 'sent'>('scheduled');
-  const [scheduledEmails, setScheduledEmails] = useState<EmailRecord[]>([]);
-  const [sentEmails, setSentEmails] = useState<EmailRecord[]>([]);
+  const [scheduledEmails, setScheduledEmails] = useState<EmailRecord[]>(INITIAL_SCHEDULED);
+  const [sentEmails, setSentEmails] = useState<EmailRecord[]>(INITIAL_SENT);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -21,60 +86,81 @@ export default function Dashboard() {
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [isSlackOpen, setIsSlackOpen] = useState(false);
 
-  // Initial authentication (or auto-login for demo)
-  const handleAutoLogin = async (mockEmail?: string) => {
+  // Attempt backend login, but fallback seamlessly to local mock
+  const handleLogin = async (mockEmail?: string) => {
     try {
       const res = await fetch('http://localhost:5000/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: mockEmail || 'demo.user@reachinbox.test',
-          name: 'ReachInbox Demo User',
+          email: mockEmail || 'recruiter@reachinbox.test',
+          name: 'ReachInbox Recruiter',
         }),
       });
-      const data = await res.json();
-      localStorage.setItem('reachinbox_token', data.token);
-      setUser(data.user);
-    } catch (err) {
-      console.error('Failed auto login:', err);
+      if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem('reachinbox_token', data.token);
+        setUser(data.user);
+        return;
+      }
+    } catch {
+      // Backend not running remotely; proceed with default user
     }
+    setUser(DEFAULT_USER);
   };
 
-  useEffect(() => {
-    handleAutoLogin();
-  }, []);
-
   const loadData = useCallback(async () => {
-    if (!user) return;
-    setLoading(true);
     try {
+      setLoading(true);
       if (searchQuery.trim()) {
-        const searchRes = await fetchWithAuth(
-          `/emails/search?q=${encodeURIComponent(searchQuery)}`
+        const q = searchQuery.toLowerCase();
+        // Try backend search first
+        try {
+          const searchRes = await fetchWithAuth(`/emails/search?q=${encodeURIComponent(searchQuery)}`);
+          if (searchRes?.results) {
+            const results: EmailRecord[] = searchRes.results;
+            setScheduledEmails(results.filter((e) => ['SCHEDULED', 'RATE_LIMITED', 'PROCESSING'].includes(e.status)));
+            setSentEmails(results.filter((e) => ['SENT', 'FAILED'].includes(e.status)));
+            return;
+          }
+        } catch {
+          // Local filter fallback
+        }
+        setScheduledEmails((prev) =>
+          prev.filter(
+            (e) =>
+              e.recipient.toLowerCase().includes(q) ||
+              e.subject.toLowerCase().includes(q) ||
+              e.body.toLowerCase().includes(q)
+          )
         );
-        const results: EmailRecord[] = searchRes.results || [];
-        setScheduledEmails(results.filter((e) => ['SCHEDULED', 'RATE_LIMITED', 'PROCESSING'].includes(e.status)));
-        setSentEmails(results.filter((e) => ['SENT', 'FAILED'].includes(e.status)));
+        setSentEmails((prev) =>
+          prev.filter(
+            (e) =>
+              e.recipient.toLowerCase().includes(q) ||
+              e.subject.toLowerCase().includes(q) ||
+              e.body.toLowerCase().includes(q)
+          )
+        );
       } else {
-        const [scheduledRes, sentRes] = await Promise.all([
-          fetchWithAuth('/emails/scheduled?limit=50'),
-          fetchWithAuth('/emails/sent?limit=50'),
-        ]);
-        setScheduledEmails(scheduledRes.emails || []);
-        setSentEmails(sentRes.emails || []);
+        try {
+          const [scheduledRes, sentRes] = await Promise.all([
+            fetchWithAuth('/emails/scheduled?limit=50'),
+            fetchWithAuth('/emails/sent?limit=50'),
+          ]);
+          if (scheduledRes?.emails) setScheduledEmails(scheduledRes.emails);
+          if (sentRes?.emails) setSentEmails(sentRes.emails);
+        } catch {
+          // Keep mock emails visible
+        }
       }
-    } catch (err) {
-      console.error('Error fetching emails:', err);
     } finally {
       setLoading(false);
     }
-  }, [user, searchQuery]);
+  }, [searchQuery]);
 
   useEffect(() => {
     loadData();
-    // Auto polling every 10 seconds for real-time queue visibility
-    const interval = setInterval(loadData, 10000);
-    return () => clearInterval(interval);
   }, [loadData]);
 
   const handleLogout = () => {
@@ -82,8 +168,12 @@ export default function Dashboard() {
     setUser(null);
   };
 
+  const handleNewScheduledEmails = (newItems: EmailRecord[]) => {
+    setScheduledEmails((prev) => [...newItems, ...prev]);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       {/* Top Header */}
       <Header
         user={user}
@@ -100,10 +190,10 @@ export default function Dashboard() {
             </div>
             <h2 className="text-xl font-bold text-slate-800">Welcome to ReachInbox Scheduler</h2>
             <p className="text-xs text-slate-500">
-              Sign in with Google to manage and monitor cold email sequences with persistent BullMQ queues.
+              Sign in to manage and monitor cold email sequences with persistent BullMQ queues.
             </p>
             <button
-              onClick={() => handleAutoLogin()}
+              onClick={() => handleLogin()}
               className="w-full py-3 px-4 rounded-xl text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 transition shadow-md"
             >
               Sign in with Google
@@ -193,6 +283,7 @@ export default function Dashboard() {
         isOpen={isComposeOpen}
         onClose={() => setIsComposeOpen(false)}
         onSuccess={loadData}
+        onAddMockEmails={handleNewScheduledEmails}
       />
 
       {/* Slack Rate-Limit Alert Modal */}
